@@ -1,0 +1,425 @@
+<html>
+
+<head>
+    <title>Entergy Power After Ida</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>
+    <link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
+    <script>
+        let ImagesState = function (images) {
+            this.images_ = images;
+            this.cur_ = 0;
+        }
+        ImagesState.prototype.back = function () {
+            let cur = this.cur_;
+            if (this.cur_ > 0) {
+                this.cur_--;
+            }
+            return this.img_ = this.images_[cur];
+        };
+        ImagesState.prototype.img = function () {
+            return this.images_[this.cur_];
+        }
+        ImagesState.prototype.images = function () {
+            return this.images_;
+        }        
+        ImagesState.prototype.next = function () {
+            let cur = this.cur_;
+            if (this.cur_ < this.images_.length - 1) {
+                this.cur_++;
+            }
+            return this.images_[cur];
+        };
+        ImagesState.prototype.reset = function () {
+            this.cur_ = 0;
+        };
+        ImagesState.prototype.length = function () {
+            return this.images_.length;
+        };
+        ImagesState.prototype.current = function () {
+            return this.cur_;
+        };
+        ImagesState.prototype.hasNext = function () {
+            return this.cur_ < this.images_.length - 1
+        };
+
+        let ImageLoader = function(images, checkReady) {
+            this.images_=  images;
+            this.checkReady_ = checkReady;
+            this.imageStates_ = null;            
+        };
+
+        ImageLoader.prototype.loadImages = function() {
+            this.imageStates_ = {};
+            $(this.images_).each((_, src) => {
+                this.imageStates_[src] = false;
+            });         
+            let imageStates = this.imageStates_;
+            let checkReady = this.checkReady_.bind(null, this.images_);
+            let imgs = [];
+            $(this.images_).each(function (i, src) {
+                let img = $('<img>');
+                img.one('load', function () {
+                    console.log('loaded ' + src);
+                    imageStates[src] = true;
+                    checkReady.call(null);
+                }).each(function () {
+                    if (this.complete) {
+                        console.log('already loaded ' + src);
+                    }
+                });
+                imgs.push(img);
+            });            
+            $(this.images_).each(function (i, src) {
+                imgs[i].attr('src', this);
+            });            
+        };
+
+        ImageLoader.prototype.isReady = function(src) {
+            return !!this.imageStates_[src];
+        };
+
+        ImageLoader.prototype.getNumLoaded = function() {
+            let numLoaded = 0;
+            for (let src in this.imageStates_) {
+                if (this.imageStates_[src]) {
+                    numLoaded++;
+                } else {
+                    console.log('waiting ' + src);
+                }
+            }
+            return numLoaded;
+        };        
+
+
+        let state = null;
+        let imageLoader = null;
+        let stopRequested = false;
+        let isPlaying = false;
+        let isStalled = false;
+        function createState(allImages) {
+            // 1630894846 is blank
+            let images = allImages.filter((img) => { 
+                let base = img.split('/')[img.split('/').length-1];
+                return !['1630894846.png', '1631053677.png', '1631046189.png', '1631330454.png', '1631083222.png'].includes(base);
+            });
+            if (useRemoteImages()) {
+                let remoteImages = $(images).map((_, img) => {
+                    let base = img.split('/')[img.split('/').length-1];
+                    return 'https://spudtrooper.github.io/ida/screenshots/' + base;
+                });
+                images = remoteImages;
+            }
+            state = new ImagesState(images);
+            imageLoader = new ImageLoader(images, checkReady)
+            stopRequested = false;
+            isPlaying = false;
+        }
+
+        // https://pqina.nl/blog/cropping-images-to-an-aspect-ratio-with-javascript/
+        function cropImage(img, opt_f) {
+            const image = new Image();
+            image.onload = () => {
+                // let's store the width and height of our image
+                const inputWidth = image.naturalWidth;
+                const inputHeight = image.naturalHeight;
+
+                const outputWidth = $('#play-img').width();
+                const top = 330
+                const bottom = 300;
+                const outputHeight = $(window).height() - 70;
+
+                // create a canvas that will present the output image
+                const outputImage = document.createElement("canvas");
+
+                // set it to the same size as the image
+                outputImage.width = outputWidth;
+                outputImage.height = outputHeight;
+
+                // draw our image at position 0, 0 on the canvas
+                const ctx = outputImage.getContext("2d");
+                ctx.drawImage(image, 0, top, inputWidth, inputHeight - top - bottom, 0, 0, outputWidth, outputHeight);
+
+                // show both the image and the canvas
+                $('#play-img').empty();
+                $('#play-img').append($(outputImage));
+
+                if (opt_f) opt_f.call(null);
+            };
+            image.src = img;
+        }
+        
+        function render(f) {
+            let img = state.img();
+            $('#num').text(state.current());
+            cropImage(img, f);
+            let millis = parseInt(img.split('/')[img.split('/').length - 1].replace('.png', '')) * 1000;
+            let date = new Date(millis);
+            let dateStr = String(date).replace(/GMT.*/, '');
+            $('#date-link').text(dateStr);
+            $('#date-link').attr('href', img);
+            let progress = 100 * (state.current() / state.length());
+            $('#progressbar').progressbar({ value: progress });
+            if (isPlaying) {
+                $('#back-btn').prop('disabled', true);
+                $('#next-btn').prop('disabled', true);
+                $('#play-btn').hide();
+                $('#stop-btn').show();
+            } else {
+                $('#back-btn').prop('disabled', false);
+                $('#next-btn').prop('disabled', false);
+                $('#play-btn').show();
+                $('#stop-btn').hide();
+            }
+            if (isStalled) {
+                $('#playstate').text('Stalled');
+            } else if (isPlaying) {
+                $('#playstate').text('Playing');
+            } else {
+                $('#playstate').text('Stopped');
+            }
+        }
+
+        function play() {
+            isPlaying = true;
+            render();
+            let next = () => {
+                if (stopRequested) {
+                    stopRequested = false;
+                    isPlaying = false;
+                    return false;
+                }
+                if (!state.hasNext()) {
+                    isPlaying = false;
+                    return false;
+                }
+                state.next();
+                return true;
+            };
+            let loop = () => {
+                let recur = next();
+                let sleep = parseInt($('#speed').val());
+                // We want to loop again after both the render occurs and the sleep.
+                let renderDone = false;
+                let sleepDone = false;
+                let afterRender = () => {
+                    if (!renderDone && sleepDone) {
+                        isStalled = false;
+                        loop();
+                    }
+                    renderDone = true;
+                };
+                let tryLoop = () => {
+                    if (renderDone && !sleepDone) {
+                        isStalled = false;
+                        loop();
+                    }
+                    sleepDone = true;
+                };
+                let demandLoop = () => {
+                    if (!renderDone && !sleepDone) {
+                        isStalled = true;
+                        loop();
+                    }
+                };                
+                render(afterRender);
+                if (recur) {
+                    setTimeout(tryLoop, sleep);
+                    setTimeout(demandLoop, 3000);
+                }
+            };
+            loop();
+        }
+
+        function reset() {
+            state.reset();
+            $('#num').text(state.current() + 1);
+            $('#den').text(state.length());
+            $("#progressbar").progressbar({ value: 0 });
+            location.hash = '';
+        }
+
+        function back() {
+            state.back();
+            render();
+        }
+
+        function next() {
+            state.next();
+            render();
+        }
+
+        function stop() {
+            stopRequested = true;
+            $('#play-btn').show();
+            $('#stop-btn').hide();
+            $('#back-btn').prop('disabled', false);
+            $('#next-btn').prop('disabled', false);
+        }
+
+        function urlParams() {
+            let hash = location.hash || '#';
+            let hashValues = hash.substring(1);
+            let params = new URLSearchParams(hashValues);
+            return params;
+        }
+
+        function updateHash() {
+            let params = urlParams();
+            let speed = $('#speed').val();
+            params.set('speed', speed);
+            location.hash = params.toString();
+        }
+
+        function isAutoplay() {
+            let params = urlParams();
+            return !!params.get('autoplay');
+        }
+
+        function useRemoteImages() {
+            let params = urlParams();
+            return !!params.get('remote');            
+        }
+
+        function setFromHash() {
+            let params = urlParams();
+            let speed = getSpeed();
+            $('#speed').val(speed);
+        }  
+
+        function getSpeed() {
+            let params = urlParams();
+            return params.get('speed') || 300;
+        }  
+        
+        function checkReady(images) {
+            let numLoaded = imageLoader.getNumLoaded();
+            $('#loaded-images').text(numLoaded);
+            if (numLoaded == 50) {
+                $('#play-btn').prop('disabled', false);
+                if (isAutoplay()) {
+                    play();
+                }                    
+
+            } else if (numLoaded == images.length - 1) {
+                // -1 because we probably won't get the last update and who gives a shit
+                $('#image-progress').fadeOut();
+            }
+        }      
+
+        function preloadImages(images) {
+            $('#loaded-images').text(0);
+            $('#total-images').text(images.length);
+            imageLoader.loadImages();
+        }
+        function init() {
+            let realInit = () => {
+                $('#next-btn').prop('disabled', true);
+                $('#back-btn').prop('disabled', true);
+                $('#play-btn').prop('disabled', true);
+                preloadImages(state.images());
+                $('#reset-btn').click(reset);
+                $('#back-btn').click(back);
+                $('#next-btn').click(next);
+                $('#play-btn').click(play);
+                $('#stop-btn').click(stop);
+
+                cropImage(state.images()[0]);
+                $("#progressbar").progressbar({ value: 0 });
+                $('#num').text(0);
+                $('#den').text(state.images().length);
+                setFromHash();
+                $('#speed').change(updateHash);
+            };
+            $.ajax({
+                url: 'animate_images.json',
+                context: document.body
+            }).done(function (images) {
+                createState(images);
+                realInit();
+            });
+        }
+        $(document).ready(init);
+    </script>
+    <style>
+        #progressbar {
+            width: 400px;
+            margin-right:20px;
+        }
+
+        #play-img {
+            padding-top: 10px;
+            width: 100%;
+        }
+
+        body {
+            font-family: sans-serif;
+        }
+
+        .home {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+        }
+        #date-link {
+            position: absolute;
+            bottom: 30px;
+            left: 25px;
+            background-color: #fff;
+            z-index: 1000;
+            font-family: courier;
+            font-size: 1.5em;
+            font-weight: bold;
+            padding: 7px;
+        }
+        div.inline { float:left; }
+        .clearBoth { clear:both; }
+        .container {
+            padding: 5px;
+            padding-left: 10px;
+        }
+        .vertical-center {
+            margin-top: 7px;
+        }        
+    </style>
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-211R401Q1P"></script>
+    <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'G-211R401Q1P');
+    </script>    
+</head>
+
+<body>
+    <div class="container">
+        <div class="inline vertical-center">
+            <a href="../">home</a>
+        </div>        
+        <div class="inline vertical-center" style="width: 20px">&nbsp;</div>
+        <div class="inline vertical-center">
+            <button id="reset-btn">Reset</button>
+            <button id="back-btn">Back</button><button id="play-btn">Play</button><button id="stop-btn"
+                style="display:none">Stop</button><button id="next-btn">Next</button><select class="inline" id="speed">
+                <option value="100">Really Fast</option>
+                <option value="200">Fast</option>
+                <option value="300">Medium</option>
+                <option value="500">Slow</option>
+            </select>
+            (<span id="num"></span> / <span id="den"></span>)
+            <span id="playstate">...</span>
+        </div>
+        <div class="inline vertical-center" style="width: 20px">&nbsp;</div>
+        <div class="inline" id="progressbar"></div>
+        <div class="inline vertical-center" style="width: 20px">&nbsp;</div>
+        <div class="inline vertical-center">
+            <span id="image-progress">Loaded <span id="loaded-images"></span> / <span id="total-images">0</span> images</span>
+        </div>
+        <br class="clearBoth" />
+    </div>
+    <div id="play-img"></div>
+    <div><a href="" target="_" id="date-link"></a></div>
+</body>
+
+</html>
